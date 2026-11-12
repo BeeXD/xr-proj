@@ -6,8 +6,6 @@ export interface AlgorithmStep<TState> {
   description: string
   pseudocodeLine: number
   operation: string
-  highlightedIndices?: number[]
-  variables?: Record<string, unknown>
 }
 
 export interface AlgorithmSession<TState> {
@@ -15,7 +13,6 @@ export interface AlgorithmSession<TState> {
   steps: AlgorithmStep<TState>[]
   currentStepIndex: number
   status: ExecutionStatus
-  error?: string
 }
 
 export interface LinkedNode {
@@ -43,8 +40,6 @@ export type DsaState =
   | { kind: 'graph'; nodes: string[]; edges: Array<[string, string]>; visited: string[]; frontier: string[]; path: string[]; activeEdge?: [string, string]; message?: string }
   | { kind: 'hash'; buckets: Array<number[]>; activeBucket?: number; probeSequence: number[]; result?: string; message?: string }
 
-export type Step<TState> = AlgorithmStep<TState>
-
 export const MAX_ARRAY_LENGTH = 16
 
 export interface AlgorithmDefinition<TState extends DsaState = DsaState> {
@@ -55,7 +50,6 @@ export interface AlgorithmDefinition<TState extends DsaState = DsaState> {
   pseudocode: string[]
   initialState: TState
   buildSteps: (state: TState, input?: number, index?: number) => AlgorithmStep<TState>[]
-  complete: (state: TState) => boolean
 }
 
 const failureOperations = new Set(['error', 'underflow', 'overflow', 'not-found'])
@@ -88,7 +82,7 @@ export function previousStep<TState>(session: AlgorithmSession<TState>): Algorit
 }
 
 export function resetSession<TState>(session: AlgorithmSession<TState>): AlgorithmSession<TState> {
-  return { ...session, currentStepIndex: 0, status: 'idle', error: undefined }
+  return { ...session, currentStepIndex: 0, status: 'idle' }
 }
 
 export function randomizeArray(random: () => number = Math.random): number[] {
@@ -102,15 +96,8 @@ export function randomizeArray(random: () => number = Math.random): number[] {
   return values
 }
 
-function immutableStep<TState>(steps: AlgorithmStep<TState>[], state: TState, description: string, pseudocodeLine: number, operation: string, highlightedIndices?: number[]): void {
-  steps.push({
-    id: steps.length,
-    state: structuredClone(state),
-    description,
-    pseudocodeLine,
-    operation,
-    ...(highlightedIndices ? { highlightedIndices: [...highlightedIndices] } : {}),
-  })
+function immutableStep<TState>(steps: AlgorithmStep<TState>[], state: TState, description: string, pseudocodeLine: number, operation: string): void {
+  steps.push({ id: steps.length, state: structuredClone(state), description, pseudocodeLine, operation })
 }
 
 const arrayInitial: DsaState = { kind: 'array', values: [9, 4, 7, 3, 8, 1], active: [] }
@@ -132,7 +119,7 @@ function buildArraySteps(state: DsaState, input: number | undefined, algorithm: 
     operation: string,
     active: number[] = [],
     extra: Partial<Extract<DsaState, { kind: 'array' }>> = {},
-  ) => immutableStep(output, { ...state, ...extra, values: [...working], active: [...active] }, description, line, operation, active)
+  ) => immutableStep(output, { ...state, ...extra, values: [...working], active: [...active] }, description, line, operation)
 
   if (algorithm === 'array.reverse') {
     for (let left = 0, right = working.length - 1; left < right; left += 1, right -= 1) {
@@ -146,7 +133,7 @@ function buildArraySteps(state: DsaState, input: number | undefined, algorithm: 
       const result = `Invalid index: ${index}.`
       snapshot(`Index ${index} is outside the array bounds.`, 0, 'error', [], { result })
     }
-    else snapshot(`Value at index ${index} is ${working[index]}.`, 0, 'access', [index], { result: `Value: ${working[index]}.` })
+    else snapshot(`Value at index ${index} is ${working[index]}.`, 1, 'access', [index], { result: `Value: ${working[index]}.` })
   } else if (algorithm === 'array.insert' || algorithm === 'array.delete') {
     if (algorithm === 'array.insert') {
       if (working.length >= MAX_ARRAY_LENGTH) {
@@ -290,7 +277,7 @@ function buildArraySteps(state: DsaState, input: number | undefined, algorithm: 
     }
     const result = found >= 0 ? `Found ${target} at index ${found}.` : `${target} was not found.`
     const resultLine = algorithm === 'search.linear' ? 3 : found >= 0 ? 2 : 4
-    immutableStep(output, { ...state, values: [...working], active: found >= 0 ? [found] : [], low, high, target, result }, result, resultLine, 'result', found >= 0 ? [found] : [])
+    immutableStep(output, { ...state, values: [...working], active: found >= 0 ? [found] : [], low, high, target, result }, result, resultLine, 'result')
     }
   }
 
@@ -346,11 +333,8 @@ function buildStackSteps(state: DsaState, input: number | undefined, operation: 
       push({ ...state, operation: 'peek', result, message: 'Stack remains unchanged.' }, 'Preserve the stack contents.', 2, 'peek')
       push({ ...state, operation: 'complete', result, message: `Peek result: ${result}.` }, 'Display peek result.', 3, 'complete')
     }
-  } else if (operation === 'stack.clear') {
-    push({ ...state, values: [], operation: 'complete', result: undefined, message: 'Stack cleared.' }, 'Clear all stack values.', 0, 'complete')
   } else {
-    const next = (values.length ? values : [12, 28, 41]).slice(0, state.capacity)
-    push({ ...state, values: next, operation: 'complete', result: next.at(-1), message: 'Loaded sample values.' }, 'Load sample stack values.', 0, 'complete')
+    push({ ...state, values: [], operation: 'complete', result: undefined, message: 'Stack cleared.' }, 'Clear all stack values.', 0, 'complete')
   }
   return output
 }
@@ -364,57 +348,50 @@ function withStackValues(state: StackState, values: number[]): StackState {
   }
 }
 
-function simpleSteps<TState extends DsaState>(_state: TState, changes: Array<{ state: TState; description: string; line: number; operation: string; indices?: number[] }>): AlgorithmStep<TState>[] {
+function simpleSteps<TState extends DsaState>(changes: Array<{ state: TState; description: string; line: number; operation: string }>): AlgorithmStep<TState>[] {
   return changes.map((change, id) => ({
     id,
     state: structuredClone(change.state),
     description: change.description,
     pseudocodeLine: change.line,
     operation: change.operation,
-    ...(change.indices ? { highlightedIndices: [...change.indices] } : {}),
   }))
-}
-
-export const stationInitialStates: Record<string, DsaState> = {
-  arrays: arrayInitial,
-  'linked-lists': listInitial,
-  stacks: stackInitial,
-  queues: queueInitial,
-  trees: treeInitial,
-  graphs: graphInitial,
-  hashes: hashInitial,
-  searching: searchInitial,
 }
 
 const registryEntries: AlgorithmDefinition[] = []
 function register(id: string, stationId: string, title: string, complexity: string, pseudocode: string[], initialState: DsaState, builder: (state: DsaState, input?: number, index?: number) => AlgorithmStep<DsaState>[]): void {
-  const sessionPseudocode = id === 'stack.push'
-    ? pseudocode
-    : [`Initialize ${title} with the current input.`, ...pseudocode]
-  registryEntries.push({ id, stationId, title, complexity, pseudocode: sessionPseudocode, initialState, buildSteps: builder, complete: (state) => {
-    if (state.kind === 'array') return state.result !== undefined
-    if (state.kind === 'stack' || state.kind === 'queue') return state.operation === 'complete' || state.operation === 'overflow' || state.operation === 'underflow'
-    if (state.kind === 'list' || state.kind === 'tree' || state.kind === 'graph' || state.kind === 'hash') return Boolean(state.message)
-    return false
-  } })
+  registryEntries.push({ id, stationId, title, complexity, pseudocode: [`Initialize ${title} with the current input.`, ...pseudocode], initialState, buildSteps: builder })
+}
+
+// Line indices must match the pseudocodeLine values buildArraySteps emits.
+const arrayPseudocode: Record<string, string[]> = {
+  'sort.bubble': ['for end = n-1 down to 1:', '  compare a[i] and a[i+1] for each i < end', '  if a[i] > a[i+1], swap them', '  stop early when a pass makes no swaps'],
+  'sort.selection': ['for start = 0 to n-1:', '  compare a[j] with the current minimum', '  swap a[start] with the minimum'],
+  'sort.insertion': ['for i = 1 to n-1: key = a[i], j = i-1', '  while j >= 0 and a[j] > key:', '    a[j+1] = a[j]; j = j-1', '  a[j+1] = key'],
+  'sort.merge': ['split the range in half and sort each half', 'compare the fronts of the left and right halves', 'write the smaller value back into the array'],
+  'sort.quick': ['pivot = a[high]; boundary = low', 'for i in low..high-1: if a[i] <= pivot, swap a[i] into boundary', 'swap pivot into a[boundary]; recurse on both sides'],
+  'array.access': ['check 0 <= index < n', 'return a[index]'],
+  'array.insert': ['check the array has room', 'write value at index n; n = n+1'],
+  'array.delete': ['find the index of value (stop if missing)', 'remove a[index] and shift the rest left'],
+  'array.reverse': ['compare a[left] and a[right], moving inward', 'swap a[left] and a[right]'],
+  'search.linear': ['Initialize the current index.', 'Compare value with target.', 'Advance when not equal.', 'Report found or not found.'],
+  'search.binary': ['Initialize low and high.', 'Compare the midpoint to target.', 'Return when equal.', 'Narrow to the next half.', 'Report not found.'],
 }
 
 for (const [id, title] of [['sort.bubble', 'Bubble Sort'], ['sort.selection', 'Selection Sort'], ['sort.insertion', 'Insertion Sort'], ['sort.merge', 'Merge Sort'], ['sort.quick', 'Quick Sort']] as const) {
-  register(id, 'arrays', title, id === 'sort.merge' ? 'Time O(n log n) · Space O(n)' : id === 'sort.quick' ? 'Time O(n log n) avg · Space O(log n)' : 'Time O(n²) · Space O(1)', ['Choose adjacent or candidate values.', 'Compare values.', 'Update the array.', 'Continue until ordered.'], arrayInitial, (state) => buildArraySteps(state, undefined, id))
+  register(id, 'arrays', title, id === 'sort.merge' ? 'Time O(n log n) · Space O(n)' : id === 'sort.quick' ? 'Time O(n log n) avg · Space O(log n)' : 'Time O(n²) · Space O(1)', arrayPseudocode[id], arrayInitial, (state) => buildArraySteps(state, undefined, id))
 }
 for (const [id, title] of [['array.access', 'Array Access'], ['array.insert', 'Array Insert'], ['array.delete', 'Array Delete'], ['array.reverse', 'Array Reverse'], ['search.linear', 'Linear Search'], ['search.binary', 'Binary Search']] as const) {
-  register(id, id.startsWith('search') ? 'searching' : 'arrays', title, id === 'search.binary' ? 'Time O(log n) · Space O(1)' : 'Time O(n) · Space O(1)', id === 'search.binary' ? ['Initialize low and high.', 'Compare the midpoint to target.', 'Return when equal.', 'Narrow to the next half.', 'Report not found.'] : id === 'search.linear' ? ['Initialize the current index.', 'Compare value with target.', 'Advance when not equal.', 'Report found or not found.'] : ['Read the value or index.', 'Inspect or modify the array.', 'Shift values when needed.', 'Report the result.'], id.startsWith('search') ? searchInitial : arrayInitial, (state, input) => buildArraySteps(state, input, id))
+  register(id, id.startsWith('search') ? 'searching' : 'arrays', title, id === 'search.binary' ? 'Time O(log n) · Space O(1)' : 'Time O(n) · Space O(1)', arrayPseudocode[id], id.startsWith('search') ? searchInitial : arrayInitial, (state, input) => buildArraySteps(state, input, id))
 }
-for (const [id, title] of [['stack.push', 'Stack Push'], ['stack.pop', 'Stack Pop'], ['stack.peek', 'Stack Peek'], ['stack.clear', 'Stack Clear'], ['stack.randomize', 'Stack Randomize']] as const) {
+for (const [id, title] of [['stack.push', 'Stack Push'], ['stack.pop', 'Stack Pop'], ['stack.peek', 'Stack Peek'], ['stack.clear', 'Stack Clear']] as const) {
   const pseudocode = id === 'stack.push'
     ? ['Read the input value.', 'Check whether the stack is full.', 'Place the value on top.', 'Update the top pointer.', 'Confirm the push operation.']
     : id === 'stack.pop'
       ? ['Check whether the stack is empty.', 'Read the current top value.', 'Remove the top value.', 'Move the top pointer.', 'Display removed value.']
       : id === 'stack.peek'
         ? ['Check whether the stack is empty.', 'Read current top value.', 'Preserve the stack contents.', 'Display peek result.']
-        : id === 'stack.clear'
-          ? ['Clear all stack values.']
-          : ['Load sample stack values.']
+        : ['Clear all stack values.']
   register(id, 'stacks', title, 'Time O(1) · Space O(n)', pseudocode, stackInitial, (state, input) => buildStackSteps(state, input, id))
 }
 for (const [id, title] of [['queue.enqueue', 'Queue Enqueue'], ['queue.dequeue', 'Queue Dequeue'], ['queue.peek', 'Queue Peek'], ['queue.clear', 'Queue Clear']] as const) {
@@ -433,7 +410,7 @@ for (const [id, title] of [['queue.enqueue', 'Queue Enqueue'], ['queue.dequeue',
         next = { ...state, values, operation: 'complete', result, message: `${id.endsWith('peek') ? 'Front value' : 'Dequeued'}: ${result}.` }
       }
     } else next = { ...state, values: [], operation: 'complete', message: 'Queue cleared.' }
-    return simpleSteps(state, [
+    return simpleSteps([
       { state: { ...state, operation: id.split('.')[1] as 'enqueue' | 'dequeue' | 'peek', message: 'Check current queue state.' }, description: 'Inspect queue capacity and endpoints.', line: 0, operation: 'inspect' },
       { state: next, description: next.message ?? 'Queue operation complete.', line: 1, operation: id.split('.')[1] },
     ])
@@ -547,8 +524,14 @@ for (const [id, title] of treeOperations) {
   })
 }
 
+const graphPseudocode: Record<string, string[]> = {
+  'graph.bfs': ['Select a start vertex.', 'Visit the next vertex and queue its unvisited neighbors.', 'Report the visit order.'],
+  'graph.dfs': ['Select a start vertex.', 'Visit the next vertex and push its unvisited neighbors.', 'Report the visit order.'],
+  'graph.add-node': ['Name the next vertex.', 'Append it to the vertex list.'],
+  'graph.add-edge': ['Pick vertex A and the target vertex.', 'Append the edge to the edge list.'],
+}
 for (const [id, title] of [['graph.bfs', 'Breadth-first Search'], ['graph.dfs', 'Depth-first Search'], ['graph.add-node', 'Add Graph Node'], ['graph.add-edge', 'Add Graph Edge']] as const) {
-  register(id, 'graphs', title, 'Time O(V + E) · Space O(V)', ['Select a start vertex.', 'Visit neighbors.', 'Track frontier and visited vertices.'], graphInitial, (state, input) => {
+  register(id, 'graphs', title, id.startsWith('graph.add') ? 'Time O(1) · Space O(1)' : 'Time O(V + E) · Space O(V)', graphPseudocode[id], graphInitial, (state, input) => {
     if (state.kind !== 'graph') throw new TypeError('Graph operation requires graph state.')
     const steps: AlgorithmStep<DsaState>[] = []
     const visited: string[] = []
@@ -557,14 +540,14 @@ for (const [id, title] of [['graph.bfs', 'Breadth-first Search'], ['graph.dfs', 
     const snap = (description: string, activeEdge?: [string, string]) => immutableStep(steps, { ...state, visited: [...visited], frontier: [...frontier], path: [], activeEdge, message: description }, description, 1, id)
     if (id === 'graph.add-node') {
       const node = String.fromCharCode(65 + state.nodes.length)
-      return simpleSteps(state, [{ state: { ...state, nodes: [...state.nodes, node], message: `Added node ${node}.` }, description: `Added node ${node}.`, line: 1, operation: id }])
+      return simpleSteps([{ state: { ...state, nodes: [...state.nodes, node], message: `Added node ${node}.` }, description: `Added node ${node}.`, line: 1, operation: id }])
     }
     if (id === 'graph.add-edge') {
       if (state.nodes.length < 2) throw new RangeError('Add at least two graph nodes before adding an edge.')
       if (input !== undefined && !Number.isInteger(input)) throw new RangeError('Graph edge target must be a node index.')
       const targetIndex = Math.abs(input ?? state.nodes.length - 1) % state.nodes.length || 1
       const edge: [string, string] = [state.nodes[0], state.nodes[targetIndex]]
-      return simpleSteps(state, [{ state: { ...state, edges: [...state.edges, edge], message: `Added edge ${edge.join('–')}.` }, description: `Added edge ${edge.join('–')}.`, line: 1, operation: id }])
+      return simpleSteps([{ state: { ...state, edges: [...state.edges, edge], message: `Added edge ${edge.join('–')}.` }, description: `Added edge ${edge.join('–')}.`, line: 1, operation: id }])
     }
     while (frontier.length) {
       const node = id === 'graph.bfs' ? frontier.shift()! : frontier.pop()!
@@ -611,6 +594,19 @@ for (const [id, title] of [['hash.insert', 'Hash Insert'], ['hash.search', 'Hash
   })
 }
 
+type TreeNode = Extract<DsaState, { kind: 'tree' }>['nodes'][number]
+
+// BST in-order is sorted order, so each value's rank is a unique x slot; y drops one row per depth.
+export function treeLayout(nodes: TreeNode[]): Map<number, [number, number, number]> {
+  const byValue = new Map(nodes.map((node) => [node.value, node]))
+  const ranked = nodes.map((node) => node.value).sort((left, right) => left - right)
+  return new Map(nodes.map((node) => {
+    let depth = 0
+    for (let parent = node.parent; parent !== undefined; parent = byValue.get(parent)?.parent) depth += 1
+    return [node.value, [(ranked.indexOf(node.value) - (nodes.length - 1) / 2) * 0.75, 1.8 - depth * 0.7, 0]]
+  }))
+}
+
 export const algorithmRegistry: AlgorithmDefinition[] = registryEntries
 export const algorithmsForStation = (stationId: string) => algorithmRegistry.filter((algorithm) => algorithm.stationId === stationId)
 export const getAlgorithmDefinition = (id: string) => algorithmRegistry.find((algorithm) => algorithm.id === id)
@@ -623,24 +619,9 @@ export function createAlgorithmSession(id: string, input?: number, stateOverride
   if (index !== undefined && (!Number.isInteger(index) || index < 0)) throw new RangeError('Algorithm index must be a non-negative integer.')
   const generatedSteps = definition.buildSteps(state, input, index)
   if (!generatedSteps.length) throw new Error(`${definition.title} did not produce any execution steps.`)
-  const steps = id === 'stack.push'
-    ? generatedSteps.map((step, stepIndex) => ({ ...step, id: stepIndex }))
-    : [
-        { id: 0, state: structuredClone(state), description: `Initialize ${definition.title} with the current input.`, pseudocodeLine: 0, operation: 'initialize' },
-        ...generatedSteps.map((step, stepIndex) => ({ ...step, id: stepIndex + 1, pseudocodeLine: step.pseudocodeLine + 1 })),
-      ]
+  const steps = [
+    { id: 0, state: structuredClone(state), description: `Initialize ${definition.title} with the current input.`, pseudocodeLine: 0, operation: 'initialize' },
+    ...generatedSteps.map((step, stepIndex) => ({ ...step, id: stepIndex + 1, pseudocodeLine: step.pseudocodeLine + 1 })),
+  ]
   return createSession(state, steps)
-}
-
-export function createStackInitialState(capacity = 5, values: number[] = []): Extract<DsaState, { kind: 'stack' }> {
-  if (!Number.isInteger(capacity) || capacity < 1) throw new RangeError('Stack capacity must be a positive integer.')
-  if (values.length > capacity) throw new RangeError('Stack values exceed the configured capacity.')
-  if (values.some((value) => !Number.isFinite(value))) throw new RangeError('Stack values must be finite numbers.')
-  return withStackValues({ kind: 'stack', values: [], capacity, topIndex: -1, bottomIndex: -1, operation: 'idle', message: values.length ? undefined : 'Stack is empty.' }, values)
-}
-
-export function createStackSession(operation: 'push' | 'pop' | 'peek' | 'clear' | 'randomize', state: Extract<DsaState, { kind: 'stack' }>, value?: number): AlgorithmSession<DsaState> {
-  if (operation === 'push' && (value === undefined || !Number.isFinite(value))) throw new RangeError('Enter a finite number to push.')
-  const id = operation === 'randomize' ? 'stack.randomize' : `stack.${operation}`
-  return createAlgorithmSession(id, value, state)
 }

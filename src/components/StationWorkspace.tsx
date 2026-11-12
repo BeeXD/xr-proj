@@ -1,69 +1,15 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Pause, Play, RotateCcw, Save, Shuffle, SkipBack, SkipForward } from 'lucide-react'
+import { ArrowLeft, Pause, Play, RotateCcw, Shuffle, SkipBack, SkipForward } from 'lucide-react'
 import {
-  algorithmRegistry,
   algorithmsForStation,
   currentSnapshot,
+  getAlgorithmDefinition,
   type DsaState,
 } from '../lib/execution'
-import { stationCards } from '../data/algorithms'
-import { saveExperiment } from '../lib/idb'
+import { stationCards, stationOperations } from '../data/stations'
 import { useAppStore } from '../store/useAppStore'
 
 const AlgorithmLabScene = lazy(() => import('./AlgorithmLabScene').then(({ AlgorithmLabScene }) => ({ default: AlgorithmLabScene })))
-
-const operationButtons: Record<string, Array<{ id: string; label: string }>> = {
-  arrays: [
-    { id: 'array.insert', label: 'Insert value' },
-    { id: 'array.delete', label: 'Delete value' },
-    { id: 'array.access', label: 'Access index' },
-    { id: 'array.reverse', label: 'Reverse' },
-    ...['sort.bubble', 'sort.selection', 'sort.insertion', 'sort.merge', 'sort.quick'].map((id) => ({ id, label: algorithmRegistry.find((item) => item.id === id)?.title ?? id })),
-  ],
-  'linked-lists': [
-    { id: 'list.insert-head', label: 'Insert at head' },
-    { id: 'list.insert-tail', label: 'Insert at tail' },
-    { id: 'list.insert-index', label: 'Insert at index' },
-    { id: 'list.delete', label: 'Delete value' },
-    { id: 'list.search', label: 'Search' },
-    { id: 'list.reverse', label: 'Reverse' },
-  ],
-  stacks: [
-    { id: 'stack.push', label: 'Push' },
-    { id: 'stack.pop', label: 'Pop' },
-    { id: 'stack.peek', label: 'Peek' },
-    { id: 'stack.clear', label: 'Clear' },
-  ],
-  queues: [
-    { id: 'queue.enqueue', label: 'Enqueue' },
-    { id: 'queue.dequeue', label: 'Dequeue' },
-    { id: 'queue.peek', label: 'Queue peek' },
-    { id: 'queue.clear', label: 'Clear queue' },
-  ],
-  trees: [
-    { id: 'tree.insert', label: 'BST insert' },
-    { id: 'tree.search', label: 'BST search' },
-    { id: 'tree.inorder', label: 'In-order' },
-    { id: 'tree.preorder', label: 'Pre-order' },
-    { id: 'tree.postorder', label: 'Post-order' },
-    { id: 'tree.levelorder', label: 'Level-order' },
-  ],
-  graphs: [
-    { id: 'graph.add-node', label: 'Add node' },
-    { id: 'graph.add-edge', label: 'Add edge' },
-    { id: 'graph.bfs', label: 'BFS' },
-    { id: 'graph.dfs', label: 'DFS' },
-  ],
-  hashes: [
-    { id: 'hash.insert', label: 'Insert' },
-    { id: 'hash.search', label: 'Search' },
-    { id: 'hash.delete', label: 'Delete' },
-  ],
-  searching: [
-    { id: 'search.linear', label: 'Linear Search' },
-    { id: 'search.binary', label: 'Binary Search' },
-  ],
-}
 
 function stationTitle(stationId: string) {
   return stationCards.find((station) => station.id === stationId)?.title ?? 'DSA Station'
@@ -90,14 +36,17 @@ export function StationWorkspace() {
     setArrayValues,
     setExecutionCapacity,
   } = useAppStore()
-  const definition = algorithmRegistry.find((algorithm) => algorithm.id === currentAlgorithmId)
+  const definition = getAlgorithmDefinition(currentAlgorithmId)
   if (!definition) throw new Error(`Workspace algorithm ${currentAlgorithmId} is not registered.`)
   const snapshot = currentSnapshot(executionSession)
   const [inputError, setInputError] = useState('')
   const [inputDraft, setInputDraft] = useState(String(executionInput))
-  const [saveError, setSaveError] = useState('')
-  const [saveStatus, setSaveStatus] = useState('')
-  const [savingRun, setSavingRun] = useState(false)
+  // The value can also change outside this box (clicking an element in 3D, the VR keypad); keep partial typing like "4." intact.
+  const [syncedInput, setSyncedInput] = useState(executionInput)
+  if (syncedInput !== executionInput) {
+    setSyncedInput(executionInput)
+    if (!inputDraft.trim() || Number(inputDraft) !== executionInput) setInputDraft(String(executionInput))
+  }
   const operationLog = useMemo(
     () => executionSession.steps
       .slice(0, executionSession.currentStepIndex + 1)
@@ -120,15 +69,11 @@ export function StationWorkspace() {
       if (requiresNumber && (!inputDraft.trim() || !Number.isFinite(Number(inputDraft)))) {
         throw new RangeError('Enter a valid finite number for this operation.')
       }
-      runStationAlgorithm(id, executionInput, id === 'list.insert-index' ? executionIndex : undefined)
+      runStationAlgorithm(id)
       setInputError('')
     } catch (error) {
       setInputError(error instanceof Error ? error.message : 'Unable to run this operation.')
     }
-  }
-  const play = () => {
-    if (executionSession.currentStepIndex >= executionSession.steps.length - 1) resetExecution()
-    setExecutionPlaying(true)
   }
   const applyArray = (draft: string) => {
     const entries = draft.trim() ? draft.split(',').map((entry) => entry.trim()) : []
@@ -141,32 +86,19 @@ export function StationWorkspace() {
       setInputError(error instanceof Error ? error.message : 'Enter a valid comma-separated array.')
     }
   }
-  const saveCurrentRun = async () => {
-    setSavingRun(true)
-    setSaveError('')
-    setSaveStatus('')
-    try {
-      await saveExperiment({
-        id: `${currentAlgorithmId}-${Date.now()}`,
-        title: definition.title,
-        module: stationTitle(activeStationId),
-        timestamp: new Date().toISOString(),
-      })
-      setSaveStatus('Experiment saved to your local library.')
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : 'The experiment could not be saved.')
-    } finally {
-      setSavingRun(false)
-    }
+  const updateInputDraft = (value: string) => {
+    setInputDraft(value)
+    if (value.trim() && Number.isFinite(Number(value))) setExecutionInput(Number(value))
   }
   const stationAlgorithms = algorithmsForStation(activeStationId)
+  const operations = stationOperations[snapshot.kind === 'queue' ? 'queues' : activeStationId] ?? []
   const currentStep = executionSession.steps[executionSession.currentStepIndex]
   const activeLine = Math.min(currentStep.pseudocodeLine, definition.pseudocode.length - 1)
   const isPlaying = executionSession.status === 'playing'
   const isCompleted = executionSession.status === 'completed' || executionSession.status === 'error'
   const displayStep = executionSession.currentStepIndex + 1
   const totalSteps = executionSession.steps.length
-  const progress = totalSteps === 0 ? 0 : (displayStep / totalSteps) * 100
+  const progress = Math.round((displayStep / totalSteps) * 100)
 
   useEffect(() => {
     if (executionSession.status === 'completed') completeAlgorithm(currentAlgorithmId)
@@ -183,12 +115,6 @@ export function StationWorkspace() {
             <p className="eyebrow eyebrow-cyan">Interactive station · {stationTitle(activeStationId)}</p>
             <h1 className="truncate text-lg font-bold text-white sm:text-xl">{definition.title}</h1>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button type="button" className="lab-button ghost small" onClick={saveCurrentRun} disabled={savingRun}>
-            <Save size={16} /> {savingRun ? 'Saving…' : 'Save run'}
-          </button>
-          <button type="button" className="lab-button ghost small" onClick={() => setScreen('dashboard')}>Return to lab</button>
         </div>
       </header>
 
@@ -232,13 +158,13 @@ export function StationWorkspace() {
             </Suspense>
 
             <div className="mt-5 flex flex-wrap items-center gap-2">
-              <button type="button" className="lab-button primary min-h-11" aria-label={isPlaying ? 'Pause algorithm' : 'Play algorithm'} onClick={() => isPlaying ? setExecutionPlaying(false) : play()}>
+              <button type="button" className="lab-button primary min-h-11" aria-label={isPlaying ? 'Pause algorithm' : 'Play algorithm'} onClick={() => setExecutionPlaying(!isPlaying)}>
                 {isPlaying ? <Pause size={16} /> : <Play size={16} />} {isPlaying ? 'Pause' : 'Play'}
               </button>
               <button type="button" className="lab-button ghost min-h-11" aria-label="Previous step" onClick={previousExecution} disabled={executionSession.currentStepIndex === 0}><SkipBack size={16} /> Prev</button>
               <button type="button" className="lab-button ghost min-h-11" aria-label="Next step" onClick={advanceExecution} disabled={isCompleted || executionSession.currentStepIndex >= totalSteps - 1}><SkipForward size={16} /> Next</button>
               <button type="button" className="lab-button ghost min-h-11" onClick={resetExecution}><RotateCcw size={16} /> Reset</button>
-              {!(snapshot.kind === 'stack' && activeStationId === 'stacks') && <button type="button" className="lab-button ghost min-h-11" onClick={randomizeExecution}><Shuffle size={16} /> Randomize</button>}
+              <button type="button" className="lab-button ghost min-h-11" onClick={randomizeExecution}><Shuffle size={16} /> Randomize</button>
               <label className="ml-auto grid min-w-36 gap-1 text-xs text-space-muted">
                 Playback speed
                 <select aria-label="Playback speed" className="min-h-10 rounded-xl border border-space-line bg-space-panel-raised px-3 text-sm text-white" value={settings.animationSpeed} onChange={(event) => useAppStore.getState().updateSettings({ animationSpeed: Number(event.target.value) })}>
@@ -257,57 +183,32 @@ export function StationWorkspace() {
             </div>
           </div>
 
-          {activeStationId === 'stacks' && (snapshot.kind === 'stack' || snapshot.kind === 'queue') && (
-            <section className="panel rounded-3xl p-4 sm:p-5" aria-label={snapshot.kind === 'stack' ? 'Stack operations' : 'Queue operations'}>
-              <h2 className="text-sm font-bold uppercase tracking-[0.16em] text-space-violet">{snapshot.kind === 'stack' ? 'Stack operations' : 'Queue operations'}</h2>
-              <div className="mt-4 flex flex-wrap items-end gap-3">
-                <label className="grid min-w-32 gap-1 text-xs text-space-muted">Numeric value
-                  <input aria-label="Numeric value" type="number" value={inputDraft} onChange={(event) => {
-                    setInputDraft(event.target.value)
-                    if (event.target.value.trim() && Number.isFinite(Number(event.target.value))) setExecutionInput(Number(event.target.value))
+          <section className="panel rounded-3xl p-4 sm:p-5">
+            <h2 className="text-sm font-bold uppercase tracking-[0.16em] text-space-violet">{snapshot.kind === 'stack' ? 'Stack operations' : snapshot.kind === 'queue' ? 'Queue operations' : 'Operation input'}</h2>
+            <div className="mt-3 flex flex-wrap items-end gap-3">
+              <label className="grid min-w-36 gap-1 text-xs text-space-muted">Value / target / index
+                <input aria-label="Numeric value" type="number" value={inputDraft} onChange={(event) => updateInputDraft(event.target.value)} className="min-h-11 rounded-xl border border-space-line bg-space-panel-raised px-3 text-white" />
+              </label>
+              {snapshot.kind === 'list' && (
+                <label className="grid min-w-28 gap-1 text-xs text-space-muted">Insert index
+                  <input aria-label="Insert index" type="number" min={0} value={executionIndex} onChange={(event) => setExecutionIndex(Number(event.target.value))} className="min-h-11 rounded-xl border border-space-line bg-space-panel-raised px-3 text-white" />
+                </label>
+              )}
+              {(snapshot.kind === 'stack' || snapshot.kind === 'queue') && (
+                <label className="grid min-w-28 gap-1 text-xs text-space-muted">Capacity
+                  <input aria-label="Capacity" type="number" min={1} max={20} value={snapshot.capacity} onChange={(event) => {
+                    try { setExecutionCapacity(Number(event.target.value)); setInputError('') }
+                    catch (error) { setInputError(error instanceof Error ? error.message : 'Invalid capacity.') }
                   }} className="min-h-11 rounded-xl border border-space-line bg-space-panel-raised px-3 text-white" />
                 </label>
-                {(snapshot.kind === 'stack' || snapshot.kind === 'queue') && (
-                  <label className="grid min-w-28 gap-1 text-xs text-space-muted">Capacity
-                    <input aria-label="Capacity" type="number" min={1} max={20} value={snapshot.capacity} onChange={(event) => {
-                      try { setExecutionCapacity(Number(event.target.value)); setInputError('') }
-                      catch (error) { setInputError(error instanceof Error ? error.message : 'Invalid capacity.') }
-                    }} className="min-h-11 rounded-xl border border-space-line bg-space-panel-raised px-3 text-white" />
-                  </label>
-                )}
-                <div className="flex flex-1 flex-wrap gap-2">
-                  {(snapshot.kind === 'stack' ? operationButtons.stacks : operationButtons.queues).map(({ id, label }) => (
-                    <button key={id} type="button" className="lab-button ghost min-h-11" onClick={() => runOperation(id)}>{label}</button>
-                  ))}
-                  {snapshot.kind === 'stack' && <button type="button" className="lab-button ghost min-h-11" onClick={randomizeExecution}><Shuffle size={16} /> Randomize</button>}
-                </div>
+              )}
+              <div className="flex flex-1 flex-wrap gap-2">
+                {operations.map(({ id, label }) => (
+                  <button key={id} type="button" className="lab-button ghost min-h-11" onClick={() => runOperation(id)}>{label}</button>
+                ))}
               </div>
-            </section>
-          )}
-
-          {activeStationId !== 'stacks' && (
-            <section className="panel rounded-3xl p-4 sm:p-5">
-              <h2 className="text-sm font-bold uppercase tracking-[0.16em] text-space-violet">Operation input</h2>
-              <div className="mt-3 flex flex-wrap items-end gap-3">
-                <label className="grid min-w-36 gap-1 text-xs text-space-muted">Value / target / index
-                  <input aria-label="Operation value" type="number" value={inputDraft} onChange={(event) => {
-                    setInputDraft(event.target.value)
-                    if (event.target.value.trim() && Number.isFinite(Number(event.target.value))) setExecutionInput(Number(event.target.value))
-                  }} className="min-h-11 rounded-xl border border-space-line bg-space-panel-raised px-3 text-white" />
-                </label>
-                {activeStationId === 'linked-lists' && (
-                  <label className="grid min-w-28 gap-1 text-xs text-space-muted">Insert index
-                    <input aria-label="Insert index" type="number" min={0} value={executionIndex} onChange={(event) => setExecutionIndex(Number(event.target.value))} className="min-h-11 rounded-xl border border-space-line bg-space-panel-raised px-3 text-white" />
-                  </label>
-                )}
-                <div className="flex flex-1 flex-wrap gap-2">
-                  {(operationButtons[activeStationId] ?? []).map(({ id, label }) => (
-                    <button key={id} type="button" className="lab-button ghost min-h-11" onClick={() => runOperation(id)}>{label}</button>
-                  ))}
-                </div>
-              </div>
-            </section>
-          )}
+            </div>
+          </section>
         </section>
 
         <aside className="min-w-0 space-y-5">
@@ -350,8 +251,6 @@ export function StationWorkspace() {
               ))}
             </ol>
             {inputError && <p className="mt-3 rounded-xl border border-rose-400/40 bg-rose-400/10 px-3 py-2 text-sm text-rose-200" role="alert">{inputError}</p>}
-            {saveError && <p className="mt-3 rounded-xl border border-rose-400/40 bg-rose-400/10 px-3 py-2 text-sm text-rose-200" role="alert">{saveError}</p>}
-            {saveStatus && <p className="mt-3 text-sm text-space-mint" role="status">{saveStatus}</p>}
           </section>
         </aside>
       </div>

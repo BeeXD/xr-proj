@@ -4,21 +4,12 @@ import { currentSnapshot } from '../lib/execution'
 import { StationWorkspace } from './StationWorkspace'
 import { useAppStore } from '../store/useAppStore'
 
-const { loadExperimentsMock, saveExperimentMock } = vi.hoisted(() => ({
-  loadExperimentsMock: vi.fn(),
-  saveExperimentMock: vi.fn(),
-}))
-
-vi.mock('../lib/idb', () => ({
-  loadExperiments: loadExperimentsMock,
-  saveExperiment: saveExperimentMock,
-}))
-
 describe('station navigation and shared workspace', () => {
+  // The lazily loaded 3D scene (three + XR) is slow to compile cold; pay that once here, not inside one test's timeout.
+  beforeAll(() => import('./AlgorithmLabScene'), 30000)
+
   beforeEach(() => {
     window.localStorage.clear()
-    loadExperimentsMock.mockReset().mockResolvedValue([])
-    saveExperimentMock.mockReset().mockResolvedValue(undefined)
     useAppStore.getState().selectStation('stacks')
     useAppStore.getState().setScreen('welcome')
   })
@@ -29,12 +20,10 @@ describe('station navigation and shared workspace', () => {
 
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Numeric value' }), { target: { value: '42' } })
     fireEvent.click(screen.getByRole('button', { name: 'Push' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
+    for (let index = 0; index < 4; index += 1) fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
     expect(screen.getByRole('img', { name: 'Stack: 42' })).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Update the top pointer.')
-    expect(screen.getByText('Step 4 / 5')).toBeInTheDocument()
+    expect(screen.getByText('Step 5 / 6')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
     expect(screen.getByText('Completed')).toBeInTheDocument()
 
@@ -89,25 +78,25 @@ describe('station navigation and shared workspace', () => {
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Numeric value' }), { target: { value: '42' } })
     fireEvent.click(screen.getByRole('button', { name: 'Push' }))
     const session = useAppStore.getState().executionSession
-    expect(session.steps).toHaveLength(5)
-    expect(screen.getByText('Step 1 / 5')).toBeInTheDocument()
-    expect(screen.getByRole('progressbar', { name: 'Execution progress' })).toHaveAttribute('aria-valuenow', '20')
+    expect(session.steps).toHaveLength(6)
+    expect(screen.getByText('Step 1 / 6')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: 'Execution progress' })).toHaveAttribute('aria-valuenow', '17')
 
-    for (let index = 0; index < 3; index += 1) fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
-    expect(screen.getByText('Step 4 / 5')).toBeInTheDocument()
-    expect(screen.getByRole('progressbar', { name: 'Execution progress' })).toHaveAttribute('aria-valuenow', '80')
+    for (let index = 0; index < 4; index += 1) fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
+    expect(screen.getByText('Step 5 / 6')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: 'Execution progress' })).toHaveAttribute('aria-valuenow', '83')
     expect(screen.getByRole('img', { name: 'Stack: 42' })).toBeInTheDocument()
     expect(screen.getAllByText('Update the top pointer.').length).toBeGreaterThan(1)
-    expect(screen.getAllByRole('list')[0].querySelector('[data-active-line="true"]')).toHaveTextContent('04Update the top pointer.')
+    expect(screen.getAllByRole('list')[0].querySelector('[data-active-line="true"]')).toHaveTextContent('05Update the top pointer.')
     const currentEntries = screen.getAllByRole('listitem').filter((item) => item.getAttribute('aria-current') === 'step')
     expect(currentEntries).toHaveLength(2)
-    expect(currentEntries.some((item) => item.textContent?.includes('04') && item.textContent.includes('Update the top pointer.'))).toBe(true)
+    expect(currentEntries.some((item) => item.textContent?.includes('05') && item.textContent.includes('Update the top pointer.'))).toBe(true)
     expect(screen.getAllByText(/Stack size: 1 \/ 5/).length).toBeGreaterThan(0)
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }))
-    expect(screen.getByText('Step 1 / 5')).toBeInTheDocument()
+    expect(screen.getByText('Step 1 / 6')).toBeInTheDocument()
     expect(screen.getByText('Ready')).toBeInTheDocument()
-    expect(screen.getByRole('progressbar', { name: 'Execution progress' })).toHaveAttribute('aria-valuenow', '20')
+    expect(screen.getByRole('progressbar', { name: 'Execution progress' })).toHaveAttribute('aria-valuenow', '17')
   })
 
   it('randomizes, advances, pauses, and resumes using the selected playback speed', () => {
@@ -136,7 +125,7 @@ describe('station navigation and shared workspace', () => {
     expect(useAppStore.getState().executionSession.currentStepIndex).toBe(completedIndex)
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }))
     expect(useAppStore.getState().executionSession).toMatchObject({ currentStepIndex: 0, status: 'idle' })
-    expect(screen.getByText('Step 1 / 5')).toBeInTheDocument()
+    expect(screen.getByText('Step 1 / 6')).toBeInTheDocument()
     vi.useRealTimers()
     vi.restoreAllMocks()
   })
@@ -160,71 +149,53 @@ describe('station navigation and shared workspace', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/Underflow/)
   })
 
-  it('saves a run to the local library and reports storage failures', async () => {
-    render(<StationWorkspace />)
-    fireEvent.click(screen.getByRole('button', { name: 'Save run' }))
-
-    await waitFor(() => {
-      expect(saveExperimentMock).toHaveBeenCalledWith(expect.objectContaining({
-        id: expect.stringMatching(/^stack\.push-/),
-        title: 'Stack Push',
-        module: 'Stacks & Queues',
-        timestamp: expect.any(String),
-      }))
-    })
-    expect(await screen.findByText('Experiment saved to your local library.')).toBeInTheDocument()
-
-    saveExperimentMock.mockRejectedValueOnce(new Error('Storage quota exceeded.'))
-    fireEvent.click(screen.getByRole('button', { name: 'Save run' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('Storage quota exceeded.')
-  })
-
-  it('refreshes the dashboard library after saving a run', async () => {
-    loadExperimentsMock
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{
-        id: 'stack.push-1',
-        title: 'Stack Push',
-        module: 'Stacks & Queues',
-        timestamp: '2026-10-18T00:00:00.000Z',
-      }, {
-        id: 'search.binary-2',
-        title: 'Recent run',
-        module: 'Searching',
-        timestamp: '2026-10-19T00:00:00.000Z',
-      }])
-    render(<App />)
-
-    fireEvent.click(screen.getByRole('button', { name: /enter the laboratory/i }))
-    const stackStation = await screen.findByRole('heading', { name: 'Stacks & Queues' })
-    fireEvent.click(stackStation.closest('button')!)
-    fireEvent.click(await screen.findByRole('button', { name: 'Save run' }, { timeout: 5000 }))
-    await screen.findByText('Experiment saved to your local library.')
-    fireEvent.click(screen.getByRole('button', { name: 'Return to lab' }))
-
-    expect(await screen.findByText('Stack Push')).toBeInTheDocument()
-    expect(document.querySelector('.saved-experiment')).toHaveTextContent('Recent run')
-  }, 15000)
-
-  it('shows a visible error when the saved library cannot be loaded', async () => {
-    loadExperimentsMock.mockRejectedValueOnce(new Error('IndexedDB is unavailable.'))
-    render(<App />)
-
-    fireEvent.click(screen.getByRole('button', { name: /enter the laboratory/i }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Saved experiments are unavailable: IndexedDB is unavailable.')
-  })
-
   it('maps the current algorithm snapshot into the 3D scene and exposes camera controls', async () => {
     render(<StationWorkspace />)
     fireEvent.click(screen.getByRole('button', { name: 'Push' }))
-    for (let index = 0; index < 3; index += 1) fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
+    for (let index = 0; index < 4; index += 1) fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
 
     expect(await screen.findByRole('region', {
       name: /Stack Push 3D visualization\. Current values: 25\. Update the top pointer\./,
-    })).toBeInTheDocument()
+    }, { timeout: 5000 })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Focus visualization' }))
     fireEvent.click(screen.getByRole('button', { name: 'Reset camera' }))
+  })
+
+  it('selects a structure element as the operation value, then operates on it', async () => {
+    useAppStore.getState().selectStation('linked-lists')
+    render(<StationWorkspace />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Select 7' }, { timeout: 5000 }))
+    expect(screen.getByRole('spinbutton', { name: 'Numeric value' })).toHaveValue(7)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete value' }))
+    for (let index = 0; index < 3; index += 1) fireEvent.click(screen.getByRole('button', { name: 'Next step' }))
+    expect(screen.getByRole('img', { name: 'Linked list: 12 to 19' })).toBeInTheDocument()
+  })
+
+  it('selects graph nodes by index and edits the value from the VR keypad', async () => {
+    useAppStore.getState().selectStation('graphs')
+    render(<StationWorkspace />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Select C' }, { timeout: 5000 }))
+    expect(useAppStore.getState().executionInput).toBe(2)
+
+    const { pressValueKey, setExecutionInput } = useAppStore.getState()
+    act(() => setExecutionInput(0))
+    for (const key of ['4', '2', '7', '1']) act(() => pressValueKey(key))
+    expect(screen.getByRole('spinbutton', { name: 'Numeric value' })).toHaveValue(427)
+    for (const key of ['4', '2', '7', '1']) pressValueKey(key)
+    act(() => pressValueKey('Del'))
+    act(() => pressValueKey('±'))
+    expect(useAppStore.getState().executionInput).toBe(-42)
+    act(() => pressValueKey('5'))
+    expect(useAppStore.getState().executionInput).toBe(-425)
+  })
+
+  it('keeps the 3D scene mounted when switching algorithms, so a live VR session survives', async () => {
+    useAppStore.getState().selectStation('arrays')
+    render(<App />)
+    const scene = await screen.findByRole('region', { name: /Bubble Sort 3D visualization/ }, { timeout: 5000 })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Algorithm' }), { target: { value: 'sort.quick' } })
+    expect(await screen.findByRole('heading', { name: 'Quick Sort' })).toBeInTheDocument()
+    expect(scene).toBeInTheDocument()
   })
 
   it('routes Explore Station to all seven registered station workspaces', async () => {

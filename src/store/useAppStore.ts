@@ -1,17 +1,10 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import {
-  BUBBLE_SORT_ENGINE_VERSION,
-  createBubbleSortSteps,
-  createRandomBubbleSortInput,
-  DEFAULT_BUBBLE_SORT_INPUT,
-} from '../lib/bubbleSort'
-import type { AlgorithmStep } from '../data/algorithms'
-import {
   algorithmsForStation,
   createAlgorithmSession,
-  createSession,
   currentSnapshot,
+  getAlgorithmDefinition,
   MAX_ARRAY_LENGTH,
   nextStep,
   previousStep,
@@ -26,18 +19,12 @@ export type ThemeMode = 'dark' | 'light' | 'system'
 
 export interface AppSettings {
   reducedMotion: boolean
-  showHints: boolean
   animationSpeed: number
-  cameraSensitivity: number
   theme: ThemeMode
 }
 
 export interface ProgressState {
   completedAlgorithms: string[]
-  learningMinutes: number
-  streak: number
-  recentAlgorithms: string[]
-  lastSavedAt: string | null
 }
 
 interface AppState {
@@ -46,16 +33,12 @@ interface AppState {
   settings: AppSettings
   progress: ProgressState
   settingsOpen: boolean
-  bubbleSortInput: number[]
-  bubbleSortSteps: AlgorithmStep[]
-  currentStepIndex: number
-  isBubbleSortPlaying: boolean
-  bubbleSortEngineVersion: number
   activeStationId: string
   executionSession: AlgorithmSession<DsaState>
   executionInput: number
   executionIndex: number
   setExecutionInput: (value: number) => void
+  pressValueKey: (key: string) => void
   setExecutionIndex: (value: number) => void
   setArrayValues: (values: number[]) => void
   setExecutionCapacity: (capacity: number) => void
@@ -67,50 +50,18 @@ interface AppState {
   randomizeExecution: () => void
   setExecutionPlaying: (playing: boolean) => void
   setScreen: (screen: Screen) => void
-  selectAlgorithm: (id: string) => void
-  nextBubbleSortStep: () => void
-  previousBubbleSortStep: () => void
-  resetBubbleSort: () => void
-  randomizeBubbleSort: (random?: () => number) => void
-  setBubbleSortPlaying: (playing: boolean) => void
-  startBubbleSort: () => void
-  advanceBubbleSort: () => void
   updateSettings: (updates: Partial<AppSettings>) => void
   completeAlgorithm: (id: string) => void
   resetProgress: () => void
   openSettings: (open: boolean) => void
 }
 
+type PersistedState = Pick<AppState, 'settings' | 'progress'>
+
 const defaultSettings: AppSettings = {
   reducedMotion: false,
-  showHints: true,
   animationSpeed: 1,
-  cameraSensitivity: 1,
   theme: 'dark',
-}
-
-const defaultProgress: ProgressState = {
-  completedAlgorithms: ['search.binary'],
-  learningMinutes: 28,
-  streak: 4,
-  recentAlgorithms: ['search.binary', 'sort.bubble', 'tree.inorder'],
-  lastSavedAt: null,
-}
-
-const createBubbleSortRun = (input: number[]) => ({
-  bubbleSortInput: [...input],
-  bubbleSortSteps: createBubbleSortSteps(input),
-  currentStepIndex: 0,
-  isBubbleSortPlaying: false,
-  bubbleSortEngineVersion: BUBBLE_SORT_ENGINE_VERSION,
-})
-
-function isPartialAppState(value: unknown): value is Partial<AppState> {
-  return typeof value === 'object' && value !== null
-}
-
-function isValidBubbleSortInput(value: unknown): value is number[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'number' && Number.isFinite(item))
 }
 
 const firstStationAlgorithm = (stationId: string) => {
@@ -119,7 +70,6 @@ const firstStationAlgorithm = (stationId: string) => {
   return algorithm
 }
 const initialStation = firstStationAlgorithm('arrays')
-const initialExecution = createAlgorithmSession(initialStation.id, 25)
 
 export const useAppStore = create<AppState>()(
   persist(
@@ -127,21 +77,23 @@ export const useAppStore = create<AppState>()(
       screen: 'welcome',
       currentAlgorithmId: initialStation.id,
       settings: defaultSettings,
-      progress: defaultProgress,
+      progress: { completedAlgorithms: [] },
       settingsOpen: false,
-      ...createBubbleSortRun(DEFAULT_BUBBLE_SORT_INPUT),
       activeStationId: initialStation.stationId,
-      executionSession: initialExecution,
+      executionSession: createAlgorithmSession(initialStation.id, 25),
       executionInput: 16,
       executionIndex: 1,
       setScreen: (screen) => set({ screen }),
-      selectAlgorithm: (id) =>
-        set({
-          currentAlgorithmId: id,
-          screen: 'workspace',
-          ...(id === 'bubble-sort' ? createBubbleSortRun(DEFAULT_BUBBLE_SORT_INPUT) : {}),
-        }),
       setExecutionInput: (value) => set({ executionInput: value }),
+      // Keypad entry for VR, where there is no text field: digits append (up to 3), 'Del' drops the last digit, '±' flips the sign.
+      pressValueKey: (key) =>
+        set(({ executionInput }) => {
+          const value = Math.trunc(executionInput)
+          if (key === 'Del') return { executionInput: Math.trunc(value / 10) }
+          if (key === '±') return { executionInput: -value }
+          if (!/^\d$/.test(key) || Math.abs(value) >= 100) return {}
+          return { executionInput: (value < 0 ? -1 : 1) * (Math.abs(value) * 10 + Number(key)) }
+        }),
       setExecutionIndex: (value) => set({ executionIndex: value }),
       setArrayValues: (values) =>
         set((state) => {
@@ -166,7 +118,6 @@ export const useAppStore = create<AppState>()(
         }),
       selectStation: (stationId) => {
         const algorithm = firstStationAlgorithm(stationId)
-        if (!algorithm) throw new Error(`No algorithms registered for station ${stationId}.`)
         set({
           currentAlgorithmId: algorithm.id,
           activeStationId: stationId,
@@ -234,90 +185,42 @@ export const useAppStore = create<AppState>()(
             randomized = { ...current, edges: possibleEdges, visited: [], frontier: [], path: [] }
           }
           else randomized = { ...current, buckets: [[], [], [], [], [], []], probeSequence: [], result: undefined }
-          const steps = createAlgorithmSession(state.currentAlgorithmId, state.executionInput, randomized).steps
-          return { executionSession: createSession(randomized, steps) }
+          return { executionSession: createAlgorithmSession(state.currentAlgorithmId, state.executionInput, randomized) }
         }),
       setExecutionPlaying: (playing) =>
-        set((state) => ({
-          executionSession: {
-            ...state.executionSession,
-            status: playing
-              ? state.executionSession.currentStepIndex >= state.executionSession.steps.length - 1
-                ? ['error', 'underflow', 'overflow', 'not-found'].includes(state.executionSession.steps[state.executionSession.currentStepIndex].operation) ? 'error' : 'completed'
-                : 'playing'
-              : 'paused',
-          },
-        })),
-      nextBubbleSortStep: () =>
-        set((state) => {
-          const nextIndex = Math.min(state.currentStepIndex + 1, state.bubbleSortSteps.length - 1)
-          return {
-            currentStepIndex: nextIndex,
-            isBubbleSortPlaying: nextIndex < state.bubbleSortSteps.length - 1 && state.isBubbleSortPlaying,
-          }
-        }),
-      previousBubbleSortStep: () =>
-        set((state) => ({
-          currentStepIndex: Math.max(0, state.currentStepIndex - 1),
-          isBubbleSortPlaying: false,
-        })),
-      resetBubbleSort: () => set(createBubbleSortRun(DEFAULT_BUBBLE_SORT_INPUT)),
-      randomizeBubbleSort: (random) =>
-        set(() => createBubbleSortRun(createRandomBubbleSortInput(random))),
-      setBubbleSortPlaying: (playing) =>
-        set((state) => ({
-          isBubbleSortPlaying: playing && state.currentStepIndex < state.bubbleSortSteps.length - 1,
-        })),
-      startBubbleSort: () => set({ currentStepIndex: 0, isBubbleSortPlaying: true }),
-      advanceBubbleSort: () =>
-        set((state) => {
-          const nextIndex = Math.min(state.currentStepIndex + 1, state.bubbleSortSteps.length - 1)
-          return {
-            currentStepIndex: nextIndex,
-            isBubbleSortPlaying: nextIndex < state.bubbleSortSteps.length - 1,
-          }
+        set(({ executionSession: session }) => {
+          if (!playing) return { executionSession: { ...session, status: 'paused' } }
+          // Pressing play on a finished run replays it from the first step.
+          const start = session.currentStepIndex >= session.steps.length - 1 ? resetSession(session) : session
+          return { executionSession: { ...start, status: 'playing' } }
         }),
       updateSettings: (updates) =>
         set((state) => ({
           settings: { ...state.settings, ...updates },
         })),
       completeAlgorithm: (id) =>
-        set((state) => {
-          const existing = state.progress.completedAlgorithms.includes(id)
-          return {
-            progress: {
-              ...state.progress,
-              completedAlgorithms: existing ? state.progress.completedAlgorithms : [...state.progress.completedAlgorithms, id],
-              recentAlgorithms: [id, ...state.progress.recentAlgorithms.filter((value) => value !== id)].slice(0, 5),
-              lastSavedAt: new Date().toISOString(),
-            },
-          }
-        }),
-      resetProgress: () =>
-        set({
-          progress: {
-            completedAlgorithms: [],
-            learningMinutes: 0,
-            streak: 0,
-            recentAlgorithms: [],
-            lastSavedAt: new Date().toISOString(),
-          },
-        }),
+        set(({ progress }) => progress.completedAlgorithms.includes(id)
+          ? {}
+          : { progress: { completedAlgorithms: [...progress.completedAlgorithms, id] } }),
+      resetProgress: () => set({ progress: { completedAlgorithms: [] } }),
       openSettings: (open) => set({ settingsOpen: open }),
     }),
     {
       name: 'algospace-xr-store',
-      merge: (persistedState, currentState) => {
-        const persisted = isPartialAppState(persistedState) ? persistedState : {}
-        const mergedState = { ...currentState, ...persisted }
-        if (persisted.bubbleSortEngineVersion === BUBBLE_SORT_ENGINE_VERSION) {
-          return mergedState
+      version: 1,
+      partialize: ({ settings, progress }): PersistedState => ({ settings, progress }),
+      // Version 0 persisted the whole store, including every step snapshot and legacy fields.
+      migrate: (persisted): PersistedState => {
+        const old = (persisted ?? {}) as { settings?: Partial<AppSettings>; progress?: { completedAlgorithms?: unknown } }
+        const completed = Array.isArray(old.progress?.completedAlgorithms) ? old.progress.completedAlgorithms : []
+        return {
+          settings: {
+            reducedMotion: old.settings?.reducedMotion === true,
+            animationSpeed: typeof old.settings?.animationSpeed === 'number' ? old.settings.animationSpeed : defaultSettings.animationSpeed,
+            theme: old.settings?.theme === 'light' || old.settings?.theme === 'system' ? old.settings.theme : defaultSettings.theme,
+          },
+          progress: { completedAlgorithms: completed.filter((id): id is string => typeof id === 'string' && Boolean(getAlgorithmDefinition(id))) },
         }
-
-        const input = isValidBubbleSortInput(persisted.bubbleSortInput)
-          ? persisted.bubbleSortInput
-          : DEFAULT_BUBBLE_SORT_INPUT
-        return { ...mergedState, ...createBubbleSortRun(input) }
       },
     },
   ),

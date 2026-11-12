@@ -4,7 +4,6 @@ import { useMemo } from 'react'
 
 interface LabSceneProps {
   reducedMotion?: boolean
-  cameraSensitivity?: number
 }
 
 function DataOrb({
@@ -82,7 +81,7 @@ function LabStage({ reducedMotion }: { reducedMotion: boolean }) {
   )
 }
 
-export function LabScene({ reducedMotion = false, cameraSensitivity = 1 }: LabSceneProps) {
+export function LabScene({ reducedMotion = false }: LabSceneProps) {
   return (
     <div className="lab-scene">
       <Canvas camera={{ position: [0, 0.8, 7.2], fov: 40 }}>
@@ -98,7 +97,6 @@ export function LabScene({ reducedMotion = false, cameraSensitivity = 1 }: LabSc
           enablePan={false}
           enableDamping={!reducedMotion}
           autoRotate={false}
-          rotateSpeed={cameraSensitivity}
           minPolarAngle={Math.PI / 2.8}
           maxPolarAngle={Math.PI / 1.8}
         />

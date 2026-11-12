@@ -2,17 +2,17 @@ import {
   algorithmRegistry,
   algorithmsForStation,
   createAlgorithmSession,
-  createStackInitialState,
-  createStackSession,
   currentSnapshot,
   nextStep,
   previousStep,
   randomizeArray,
   resetSession,
+  treeLayout,
   type DsaState,
 } from './execution'
 
 const finalState = (session: ReturnType<typeof createAlgorithmSession>) => session.steps.at(-1)!.state
+const stack = (capacity: number, values: number[] = []): DsaState => ({ kind: 'stack', values, capacity, topIndex: values.length - 1, bottomIndex: values.length ? 0 : -1, operation: 'idle' })
 
 describe('typed algorithm registry', () => {
   it('registers working algorithms for every dashboard station with synchronized pseudocode lines', () => {
@@ -30,7 +30,7 @@ describe('typed algorithm registry', () => {
       const binary = createAlgorithmSession('search.binary', 16)
       expect(binary.steps.find((step) => step.operation === 'compare')?.pseudocodeLine).toBe(2)
       const stackPush = createAlgorithmSession('stack.push', 25)
-      expect(stackPush.steps.find((step) => step.description === 'Place the value on top.')?.pseudocodeLine).toBe(2)
+      expect(stackPush.steps.find((step) => step.description === 'Place the value on top.')?.pseudocodeLine).toBe(3)
     }
   })
 
@@ -79,10 +79,11 @@ describe('typed algorithm registry', () => {
   })
 
   it('steps through stack push, pop, peek, clear, overflow, underflow, and reset', () => {
-    const empty = createStackInitialState(2)
-    const push = createStackSession('push', empty, 17)
-    expect(push.steps).toHaveLength(5)
+    const empty = stack(2)
+    const push = createAlgorithmSession('stack.push', 17, empty)
+    expect(push.steps).toHaveLength(6)
     expect(push.steps.map((step) => step.description)).toEqual([
+      'Initialize Stack Push with the current input.',
       'Read the input value.',
       'Check whether the stack is full.',
       'Place the value on top.',
@@ -90,27 +91,23 @@ describe('typed algorithm registry', () => {
       'Confirm the push operation.',
     ])
     expect(push.steps.every((step) => step.pseudocodeLine >= 0 && step.pseudocodeLine < algorithmRegistry.find((item) => item.id === 'stack.push')!.pseudocode.length)).toBe(true)
-    expect(push.steps[3].pseudocodeLine).toBe(3)
-    expect(push.steps[3].description).toBe('Update the top pointer.')
-    expect((push.steps[3].state as Extract<DsaState, { kind: 'stack' }>)).toMatchObject({ values: [17], topIndex: 0, bottomIndex: 0, result: 17 })
-    expect((push.steps[3].state as Extract<DsaState, { kind: 'stack' }>).values).toEqual([17])
+    expect(push.steps[4].pseudocodeLine).toBe(4)
+    expect(push.steps[4].description).toBe('Update the top pointer.')
+    expect((push.steps[4].state as Extract<DsaState, { kind: 'stack' }>)).toMatchObject({ values: [17], topIndex: 0, bottomIndex: 0, result: 17 })
     expect((finalState(push) as Extract<DsaState, { kind: 'stack' }>).result).toBe(17)
-    const full = createStackInitialState(1, [8])
-    const overflow = createStackSession('push', full, 3)
+    const overflow = createAlgorithmSession('stack.push', 3, stack(1, [8]))
     expect((finalState(overflow) as Extract<DsaState, { kind: 'stack' }>).operation).toBe('overflow')
     let overflowAtEnd = overflow
     while (overflowAtEnd.currentStepIndex < overflowAtEnd.steps.length - 1) overflowAtEnd = nextStep(overflowAtEnd)
     expect(overflowAtEnd.status).toBe('error')
-    expect((finalState(createStackSession('pop', empty)) as Extract<DsaState, { kind: 'stack' }>).operation).toBe('underflow')
-    expect((finalState(createStackSession('peek', empty)) as Extract<DsaState, { kind: 'stack' }>).operation).toBe('underflow')
-    const filled = createStackInitialState(3, [5, 11])
-    expect((finalState(createStackSession('peek', filled)) as Extract<DsaState, { kind: 'stack' }>).values).toEqual([5, 11])
-    expect((finalState(createStackSession('pop', filled)) as Extract<DsaState, { kind: 'stack' }>).values).toEqual([5])
-    expect((finalState(createStackSession('clear', filled)) as Extract<DsaState, { kind: 'stack' }>).values).toEqual([])
+    expect((finalState(createAlgorithmSession('stack.pop', undefined, empty)) as Extract<DsaState, { kind: 'stack' }>).operation).toBe('underflow')
+    expect((finalState(createAlgorithmSession('stack.peek', undefined, empty)) as Extract<DsaState, { kind: 'stack' }>).operation).toBe('underflow')
+    const filled = stack(3, [5, 11])
+    expect((finalState(createAlgorithmSession('stack.peek', undefined, filled)) as Extract<DsaState, { kind: 'stack' }>).values).toEqual([5, 11])
+    expect((finalState(createAlgorithmSession('stack.pop', undefined, filled)) as Extract<DsaState, { kind: 'stack' }>).values).toEqual([5])
+    expect((finalState(createAlgorithmSession('stack.clear', undefined, filled)) as Extract<DsaState, { kind: 'stack' }>).values).toEqual([])
     expect(currentSnapshot(resetSession(push))).toEqual(push.steps[0].state)
     expect(resetSession(push)).toMatchObject({ currentStepIndex: 0, status: 'idle' })
-    expect(() => createStackInitialState(0)).toThrow(RangeError)
-    expect(() => createStackInitialState(1, [1, 2])).toThrow(RangeError)
   })
 
   it('executes queue operations and reports empty and capacity states', () => {
@@ -146,6 +143,21 @@ describe('typed algorithm registry', () => {
     expect((finalState(createAlgorithmSession('tree.preorder', undefined, state)) as Extract<DsaState, { kind: 'tree' }>).traversal).toEqual([12, 7, 19])
     expect((finalState(createAlgorithmSession('tree.postorder', undefined, state)) as Extract<DsaState, { kind: 'tree' }>).traversal).toEqual([7, 19, 12])
     expect((finalState(createAlgorithmSession('tree.levelorder', undefined, state)) as Extract<DsaState, { kind: 'tree' }>).traversal).toEqual([12, 7, 19])
+  })
+
+  it('lays out trees deeper than three levels without overlapping nodes', () => {
+    const nodes = [
+      { value: 50 },
+      { value: 40, parent: 50, side: 'left' as const },
+      { value: 60, parent: 50, side: 'right' as const },
+      { value: 30, parent: 40, side: 'left' as const },
+      { value: 45, parent: 40, side: 'right' as const },
+      { value: 20, parent: 30, side: 'left' as const },
+    ]
+    const layout = treeLayout(nodes)
+    expect(new Set([...layout.values()].map(([x, y]) => `${x},${y}`)).size).toBe(nodes.length)
+    expect(layout.get(20)![1]).toBeLessThan(layout.get(30)![1])
+    expect(layout.get(20)![0]).toBeLessThan(layout.get(30)![0])
   })
 
   it('runs graph traversal, reports a path, and mutates nodes and edges through snapshots', () => {

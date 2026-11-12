@@ -1,4 +1,3 @@
-import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowRight,
   BarChart3,
@@ -7,6 +6,7 @@ import {
   Database,
   DatabaseZap,
   Gauge,
+  Glasses,
   Layers3,
   Link2,
   Menu,
@@ -22,10 +22,9 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { stationCards } from './data/algorithms'
-import { algorithmsForStation, getAlgorithmDefinition } from './lib/execution'
-import { loadExperiments } from './lib/idb'
-import { getCurrentTheme, useAppStore } from './store/useAppStore'
+import { stationCards } from './data/stations'
+import { algorithmRegistry, algorithmsForStation, getAlgorithmDefinition } from './lib/execution'
+import { getCurrentTheme, useAppStore, type AppSettings } from './store/useAppStore'
 
 const StationWorkspace = lazy(() => import('./components/StationWorkspace').then(({ StationWorkspace }) => ({ default: StationWorkspace })))
 const LabScene = lazy(() => import('./components/LabScene').then(({ LabScene }) => ({ default: LabScene })))
@@ -33,20 +32,13 @@ const LabScene = lazy(() => import('./components/LabScene').then(({ LabScene }) 
 const featureCards = [
   { title: 'Interactive 3D visualizations', description: 'Explore floating data structures in a futuristic lab', icon: Compass },
   { title: 'Step-by-step algorithms', description: 'Trace complex logic with synchronized narration and highlights', icon: Wand2 },
-  { title: 'Progress tracking', description: 'Persist milestones, streaks, and recent learning activity locally', icon: BarChart3 },
-  { title: 'Local-first learning', description: 'Everything remains browser-based and resilient across reloads', icon: DatabaseZap },
+  { title: 'Progress tracking', description: 'Completed algorithms are remembered in this browser', icon: BarChart3 },
+  { title: 'VR ready', description: 'Step through any station in WebXR on a Meta Quest', icon: Glasses },
 ]
-
-const legacyAlgorithmIds: Record<string, string> = {
-  'binary-search': 'search.binary',
-  'bubble-sort': 'sort.bubble',
-  'tree-traversal': 'tree.inorder',
-}
 
 function App() {
   const {
     screen,
-    currentAlgorithmId,
     settings,
     settingsOpen,
     openSettings,
@@ -57,62 +49,31 @@ function App() {
     selectStation,
   } = useAppStore()
 
-  const [savedExperiments, setSavedExperiments] = useState<{ title: string; module: string }[]>([])
-  const [experimentLoadError, setExperimentLoadError] = useState('')
-
   useEffect(() => {
     document.documentElement.dataset.theme = getCurrentTheme()
   }, [settings.theme])
 
-  useEffect(() => {
-    if (screen !== 'dashboard') return
-    let cancelled = false
-    loadExperiments()
-      .then((items) => {
-        if (cancelled) return
-        setSavedExperiments([...items].sort((left, right) => right.timestamp.localeCompare(left.timestamp)).slice(0, 4))
-        setExperimentLoadError('')
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return
-        setSavedExperiments([])
-        setExperimentLoadError(error instanceof Error ? error.message : 'Saved experiments could not be loaded.')
-      })
-    return () => { cancelled = true }
-  }, [screen])
-
   if (screen === 'workspace') {
     return (
       <Suspense fallback={<div className="p-8 text-space-muted" role="status">Loading workspace…</div>}>
-        <StationWorkspace key={currentAlgorithmId} />
+        <StationWorkspace />
       </Suspense>
     )
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white">
-      <AnimatePresence mode="wait">
-        {screen === 'welcome' ? (
-          <motion.div key="welcome" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <WelcomeView
-              progress={progress}
-              reducedMotion={settings.reducedMotion}
-              onEnter={() => setScreen('dashboard')}
-              onContinue={() => setScreen('dashboard')}
-              hasProgress={progress.completedAlgorithms.length > 0}
-            />
-          </motion.div>
-        ) : (
-          <motion.div
-            key="dashboard"
-            initial={settings.reducedMotion ? false : { opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={settings.reducedMotion ? { duration: 0 } : undefined}
-          >
+    <div className={`min-h-screen bg-slate-950 text-white ${settings.reducedMotion ? 'reduced-motion' : ''}`}>
+      {screen === 'welcome' ? (
+        <div key="welcome" className="fade-in">
+          <WelcomeView
+            completedCount={progress.completedAlgorithms.length}
+            reducedMotion={settings.reducedMotion}
+            onEnter={() => setScreen('dashboard')}
+          />
+        </div>
+      ) : (
+        <div key="dashboard" className="fade-in">
             <DashboardView
-              savedExperiments={savedExperiments}
-              experimentLoadError={experimentLoadError}
               settings={settings}
               isSettingsOpen={settingsOpen}
               onOpenSettings={() => openSettings(true)}
@@ -125,25 +86,20 @@ function App() {
               }}
               onSelectStation={selectStation}
             />
-          </motion.div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
     </div>
   )
 }
 
 function WelcomeView({
-  progress,
+  completedCount,
   reducedMotion,
   onEnter,
-  onContinue,
-  hasProgress,
 }: {
-  progress: { completedAlgorithms: string[]; learningMinutes: number; streak: number }
+  completedCount: number
   reducedMotion: boolean
   onEnter: () => void
-  onContinue: () => void
-  hasProgress: boolean
 }) {
   return (
     <div className="relative overflow-hidden">
@@ -181,35 +137,25 @@ function WelcomeView({
               Enter the Laboratory
               <ArrowRight size={18} />
             </button>
-            {hasProgress ? (
-              <button type="button" onClick={onContinue} className="lab-button ghost">
-                Continue Learning
-              </button>
-            ) : null}
           </div>
 
           <div className="grid max-w-lg grid-cols-3 gap-3 text-left">
             <div className="panel rounded-2xl border border-white/10 p-3">
-              <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Modules</p>
-              <p className="mt-2 text-2xl font-bold text-white">7</p>
+              <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Stations</p>
+              <p className="mt-2 text-2xl font-bold text-white">{stationCards.length}</p>
             </div>
             <div className="panel rounded-2xl border border-white/10 p-3">
-              <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Streak</p>
-              <p className="mt-2 text-2xl font-bold text-emerald-300">{progress.streak}</p>
+              <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Algorithms</p>
+              <p className="mt-2 text-2xl font-bold text-cyan-300">{algorithmRegistry.length}</p>
             </div>
             <div className="panel rounded-2xl border border-white/10 p-3">
-              <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Minutes</p>
-              <p className="mt-2 text-2xl font-bold text-cyan-300">{progress.learningMinutes}</p>
+              <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Completed</p>
+              <p className="mt-2 text-2xl font-bold text-emerald-300">{completedCount}</p>
             </div>
           </div>
         </section>
 
-        <motion.section
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-          className="relative w-full max-w-2xl"
-        >
+        <section className="slide-in relative w-full max-w-2xl">
           <div className="panel overflow-hidden rounded-[2rem] border border-cyan-400/20 p-3 shadow-[0_0_40px_rgba(34,211,238,0.15)]">
             <div className="rounded-[1.5rem] bg-slate-900/90 p-2">
               <Suspense fallback={<div className="lab-scene" aria-label="Loading 3D scene" aria-busy="true" />}>
@@ -217,7 +163,7 @@ function WelcomeView({
               </Suspense>
             </div>
           </div>
-        </motion.section>
+        </section>
       </main>
 
       <section className="relative mx-auto max-w-7xl px-4 pb-12 md:px-8">
@@ -245,31 +191,20 @@ function DashboardView({
   onUpdateSettings,
   onResetProgress,
   onSelectStation,
-  savedExperiments,
-  experimentLoadError,
 }: {
-  settings: { theme: 'dark' | 'light' | 'system'; reducedMotion: boolean; animationSpeed: number; cameraSensitivity: number; showHints: boolean }
+  settings: AppSettings
   isSettingsOpen: boolean
   onOpenSettings: () => void
   onCloseSettings: () => void
-  onUpdateSettings: (updates: Partial<typeof settings>) => void
+  onUpdateSettings: (updates: Partial<AppSettings>) => void
   onResetProgress: () => void
   onSelectStation: (id: string) => void
-  savedExperiments: { title: string; module: string }[]
-  experimentLoadError: string
 }) {
-  const { progress } = useAppStore()
+  const progress = useAppStore((state) => state.progress)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
-  const completedModules = new Set(
-    progress.completedAlgorithms
-      .map((id) => {
-        const algorithm = getAlgorithmDefinition(id) ?? getAlgorithmDefinition(legacyAlgorithmIds[id])
-        return stationCards.find((station) => station.id === algorithm?.stationId)?.title
-      })
-      .filter((module): module is string => Boolean(module)),
-  ).size
-  const hasAchievement = progress.completedAlgorithms.includes('binary-search') || progress.completedAlgorithms.includes('search.binary')
+  const completedModules = new Set(progress.completedAlgorithms.map((id) => getAlgorithmDefinition(id)?.stationId).filter(Boolean)).size
+  const hasAchievement = progress.completedAlgorithms.includes('search.binary')
 
   const goTo = (section: string) => {
     document.getElementById(section)?.scrollIntoView({ behavior: settings.reducedMotion ? 'instant' : 'smooth' })
@@ -277,7 +212,7 @@ function DashboardView({
   }
 
   return (
-    <div className={`relative min-h-screen px-4 py-4 text-space-text md:px-8 md:py-6 ${settings.reducedMotion ? 'reduced-motion' : ''}`}>
+    <div className="relative min-h-screen px-4 py-4 text-space-text md:px-8 md:py-6">
       <header className="nav-shell mx-auto mb-6 flex max-w-7xl items-center justify-between gap-3 rounded-2xl px-4 py-3 md:rounded-full md:px-5">
         <button type="button" onClick={() => goTo('dashboard-overview')} className="flex min-h-11 items-center gap-3 text-left">
           <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-space-cyan/25 bg-space-cyan/10 text-space-cyan">
@@ -335,7 +270,7 @@ function DashboardView({
             </div>
             <div className="scene-frame overflow-hidden rounded-2xl">
               <Suspense fallback={<div className="lab-scene" aria-label="Loading 3D scene" aria-busy="true" />}>
-                <LabScene reducedMotion={settings.reducedMotion} cameraSensitivity={settings.cameraSensitivity} />
+                <LabScene reducedMotion={settings.reducedMotion} />
               </Suspense>
               <div className="scene-caption">
                 <span className="inline-flex items-center gap-2"><span className="live-dot" /> Interactive environment</span>
@@ -392,10 +327,9 @@ function DashboardView({
               </span>
               <span className="collapse-indicator" aria-hidden="true">⌄</span>
             </summary>
-            <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
-              <MetricCard icon={CheckCircle2} label="Completed modules" value={completedModules} accent="cyan" />
-              <MetricCard icon={Gauge} label="Learning time" value={`${progress.learningMinutes} min`} accent="violet" />
-              <MetricCard icon={Sparkles} label="Current streak" value={`${progress.streak} days`} accent="mint" />
+            <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+              <MetricCard icon={CheckCircle2} label="Stations practiced" value={`${completedModules} / ${stationCards.length}`} accent="cyan" />
+              <MetricCard icon={Gauge} label="Algorithms completed" value={`${progress.completedAlgorithms.length} / ${algorithmRegistry.length}`} accent="violet" />
             </div>
             <div className={`achievement-card mt-4 rounded-2xl p-4 ${hasAchievement ? 'unlocked' : ''}`}>
               <div className="flex items-center gap-2 text-amber-200">
@@ -405,37 +339,6 @@ function DashboardView({
               <p className="mt-2 text-sm leading-6 text-amber-100/85">
                 {hasAchievement ? 'Binary Search champion — complete a focused search experiment.' : 'Complete Binary Search to earn your first badge.'}
               </p>
-            </div>
-          </details>
-
-          <details className="panel rounded-3xl p-5 sm:p-6" open>
-            <summary className="sidebar-summary">
-              <span>
-                <Eyebrow color="mint">Local library</Eyebrow>
-                <span className="mt-1 block text-lg font-bold text-white">Saved experiments</span>
-              </span>
-              <span className="collapse-indicator" aria-hidden="true">⌄</span>
-            </summary>
-            <div className="mt-4 space-y-2">
-              {experimentLoadError ? (
-                <p className="rounded-xl border border-rose-400/40 bg-rose-400/10 px-3 py-2 text-sm text-rose-200" role="alert">
-                  Saved experiments are unavailable: {experimentLoadError}
-                </p>
-              ) : savedExperiments.length > 0 ? (
-                savedExperiments.map((item, index) => (
-                  <div key={`${item.title}-${index}`} className="saved-experiment">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-space-cyan/10 text-space-cyan"><DatabaseZap size={16} /></span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium text-white">{item.title}</span>
-                      <span className="mt-0.5 block truncate text-xs text-space-muted">{item.module}</span>
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <div className="empty-experiments rounded-2xl px-4 py-5 text-sm text-space-muted">
-                  No experiments saved yet. Save a run from any algorithm workspace.
-                </div>
-              )}
             </div>
           </details>
 
@@ -511,30 +414,6 @@ function DashboardView({
                 />
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-slate-950/70 p-3">
-                <div className="mb-2 flex items-center justify-between text-slate-300">
-                  <span>Camera sensitivity</span>
-                  <span>{settings.cameraSensitivity.toFixed(1)}x</span>
-                </div>
-                <input
-                  type="range"
-                  min={0.5}
-                  max={2}
-                  step={0.1}
-                  value={settings.cameraSensitivity}
-                  onChange={(event) => onUpdateSettings({ cameraSensitivity: Number(event.target.value) })}
-                  className="w-full accent-violet-400"
-                />
-              </div>
-
-              <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950/70 p-3">
-                <span className="text-slate-300">Show hints</span>
-                <input
-                  type="checkbox"
-                  checked={settings.showHints}
-                  onChange={(event) => onUpdateSettings({ showHints: event.target.checked })}
-                />
-              </div>
             </div>
           </div>
         </div>
@@ -553,7 +432,7 @@ function DashboardView({
             <ol className="space-y-3 text-sm leading-6 text-space-muted">
               <li><strong className="text-white">1. Choose a station.</strong> Open a data structure from the learning station cards.</li>
               <li><strong className="text-white">2. Run the algorithm.</strong> Play, step through, or adjust speed in its workspace.</li>
-              <li><strong className="text-white">3. Save your experiment.</strong> Your local experiment history and settings stay in this browser.</li>
+              <li><strong className="text-white">3. Step into VR.</strong> On a WebXR headset such as Meta Quest, press Enter VR in any station.</li>
             </ol>
           </div>
         </div>
